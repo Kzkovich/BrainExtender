@@ -18,7 +18,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
-            cd /opt/brain-expander
+            cd /opt/BrainExtender
 
             echo "=== Pulling latest code ==="
             git pull origin main
