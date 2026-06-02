@@ -80,12 +80,11 @@ async def cmd_start(msg: Message, state: FSMContext):
         from brain.indexer import get_manifest
         manifest = get_manifest(storage)
         stats = manifest.get("stats", {})
+        name = msg.from_user.first_name or "путник"
+        files = stats.get("total_files", 0)
         await msg.answer(
-            f"🧠 Твой brain активен!\n\n"
-            f"📁 Файлов: {stats.get('total_files', 0)}\n"
-            f"📋 Типы: {', '.join(f'{k}: {v}' for k, v in stats.get('by_type', {}).items()) or 'пусто'}\n\n"
-            f"Просто напиши текст — я сохраню его в brain.\n"
-            f"/help — все команды",
+            persona.WELCOME_BACK.format(name=name, files=files),
+            parse_mode="Markdown",
         )
 
 

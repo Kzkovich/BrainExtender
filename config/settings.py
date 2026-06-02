@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     TELEGRAM_TOKEN: str = ""
     ANTHROPIC_API_KEY: str = ""
-    DATABASE_URL: str = "sqlite:///./second_brain.db"
+    DATABASE_URL: str = "sqlite:///./data/second_brain.db"
     DATA_PATH: Path = Path("./data")
 
     CLAUDE_INPUT_PRICE_PER_1M: float = 3.0
