@@ -1,115 +1,97 @@
 """
-Todoist module: detects tasks in content and creates them in Todoist.
+Todoist module: uses task_probability from classifier to decide
+whether to suggest task creation. Tasks are pre-formulated by classifier.
 """
-import json
-from typing import Optional
-
 from bot.modules.base import BrainModule, ModuleResult
 from config.settings import settings
-from core.claude import call_claude
+
+TASK_THRESHOLD = 0.45   # minimum probability to show the button
 
 
 class TodoistModule(BrainModule):
     module_id = "todoist"
-    button_label = "✅ Создать задачи в Todoist"
+
+    @property
+    def button_label(self) -> str:
+        return "✅ Создать задачи в Todoist"
 
     def can_handle(self, content: str, classification_type: str) -> bool:
+        # This is the fallback — real check uses classification object
+        return bool(settings.TODOIST_API_KEY)
+
+    def can_handle_with_classification(self, classification) -> tuple[bool, str]:
+        """
+        Main check — uses pre-computed task_probability from classifier.
+        Returns (should_show, button_label_with_probability).
+        """
         if not settings.TODOIST_API_KEY:
-            return False
-        # Applicable for any content that might have action items
-        task_keywords = [
-            "нужно", "сделать", "задача", "дедлайн", "deadline",
-            "к ", "до ", "ответственный", "action", "todo", "[ ]",
-            "поставить", "назначить", "проверить", "отправить",
-        ]
-        content_lower = content.lower()
-        return any(kw in content_lower for kw in task_keywords)
+            return False, ""
+
+        prob = getattr(classification, "task_probability", 0.0)
+        tasks = getattr(classification, "suggested_tasks", [])
+
+        if prob < TASK_THRESHOLD:
+            return False, ""
+
+        # Format probability label
+        if prob >= 0.85:
+            prob_label = "уверен"
+        elif prob >= 0.65:
+            prob_label = f"{int(prob * 100)}% вероятно"
+        else:
+            prob_label = f"{int(prob * 100)}%?"
+
+        # Show first task preview in button if available
+        if tasks:
+            first_task = tasks[0][:40] + ("…" if len(tasks[0]) > 40 else "")
+            label = f"✅ «{first_task}» ({prob_label})"
+        else:
+            label = f"✅ Поставить задачу ({prob_label})"
+
+        return True, label
 
     async def run(self, content: str, user_id: str, extra: dict) -> ModuleResult:
-        # Step 1: Extract tasks from content via Claude
-        tasks = await self._extract_tasks(content, user_id)
-        if not tasks:
-            return ModuleResult(success=False, message="Задач не найдено в тексте.")
+        classification = extra.get("classification")
+        tasks = getattr(classification, "suggested_tasks", []) if classification else []
 
-        # Step 2: Create tasks in Todoist
+        # If classifier gave us tasks — use them directly (no extra Claude call)
+        if not tasks:
+            return ModuleResult(
+                success=False,
+                message="🌊 Задачи не обнаружены в этом тексте.",
+            )
+
         created = []
         failed = []
-        for task in tasks:
-            ok = await self._create_todoist_task(task)
+        for task_text in tasks:
+            ok = await self._create_todoist_task(task_text)
             if ok:
-                created.append(task["content"])
+                created.append(task_text)
             else:
-                failed.append(task["content"])
+                failed.append(task_text)
 
         if not created:
             return ModuleResult(
                 success=False,
-                message=f"Не удалось создать задачи в Todoist. Проверь API ключ.",
+                message="🌊 Не удалось создать задачи в Todoist.\nПроверь TODOIST_API_KEY на сервере.",
             )
 
-        lines = [f"✅ *Создано в Todoist ({len(created)}):*"]
+        lines = [f"⚓ *Задачи причалили в Todoist ({len(created)}):*\n"]
         for t in created:
             lines.append(f"• {t}")
         if failed:
-            lines.append(f"\n⚠️ Не удалось: {len(failed)}")
+            lines.append(f"\n⚠️ Не удалось создать: {len(failed)}")
 
         return ModuleResult(success=True, message="\n".join(lines), data={"created": created})
 
-    async def _extract_tasks(self, content: str, user_id: str) -> list[dict]:
-        """Ask Claude to extract actionable tasks from content."""
-        system = """Извлеки все конкретные задачи/action items из текста.
-Задача — это конкретное действие с исполнителем или без, которое нужно выполнить.
-
-Верни JSON массив:
-[
-  {
-    "content": "Краткое название задачи (1 строка)",
-    "description": "Детали если есть",
-    "due_string": "tomorrow|next week|2026-06-10 или null",
-    "priority": 1-4
-  }
-]
-priority: 1=срочно, 2=высокий, 3=средний, 4=обычный
-Если задач нет — верни []."""
-
-        try:
-            response, _ = await call_claude(
-                system=system,
-                user_message=content[:3000],
-                user_id=user_id,
-                operation="query",
-                json_mode=True,
-            )
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("```", 2)[1]
-                if cleaned.startswith("json"):
-                    cleaned = cleaned[4:]
-                cleaned = cleaned.rsplit("```", 1)[0].strip()
-            tasks = json.loads(cleaned)
-            return tasks if isinstance(tasks, list) else []
-        except Exception:
-            return []
-
-    async def _create_todoist_task(self, task: dict) -> bool:
-        """Create a single task in Todoist via REST API."""
+    async def _create_todoist_task(self, task_text: str) -> bool:
         try:
             import httpx
-            payload = {
-                "content": task.get("content", "Задача"),
-                "priority": task.get("priority", 4),
-            }
-            if task.get("description"):
-                payload["description"] = task["description"]
-            if task.get("due_string") and task["due_string"] != "null":
-                payload["due_string"] = task["due_string"]
-                payload["due_lang"] = "ru"
-
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.post(
                     "https://api.todoist.com/rest/v2/tasks",
                     headers={"Authorization": f"Bearer {settings.TODOIST_API_KEY}"},
-                    json=payload,
+                    json={"content": task_text, "priority": 3},
                 )
             return r.status_code == 200
         except Exception:

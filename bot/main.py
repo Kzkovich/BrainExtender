@@ -67,16 +67,23 @@ def _ingest_preview_keyboard(classification_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def _modules_keyboard(cid: str, content: str, classification_type: str) -> Optional[InlineKeyboardMarkup]:
-    """Build keyboard with applicable module buttons after save."""
-    modules = get_applicable_modules(content, classification_type)
-    if not modules:
-        return None
-    buttons = [
-        [InlineKeyboardButton(text=m.button_label, callback_data=f"module:{m.module_id}:{cid}")]
-        for m in modules
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def _modules_keyboard(cid: str, classification) -> Optional[InlineKeyboardMarkup]:
+    """Build keyboard with applicable module buttons after save.
+    Uses pre-computed classification fields (task_probability etc.)."""
+    from bot.modules import ALL_MODULES
+    from bot.modules.todoist import TodoistModule
+
+    buttons = []
+    for m in ALL_MODULES:
+        if isinstance(m, TodoistModule):
+            show, label = m.can_handle_with_classification(classification)
+            if show:
+                buttons.append([InlineKeyboardButton(text=label, callback_data=f"module:{m.module_id}:{cid}")])
+        else:
+            if m.can_handle("", classification.content_type):
+                buttons.append([InlineKeyboardButton(text=m.button_label, callback_data=f"module:{m.module_id}:{cid}")])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
 
 # Temporary in-memory store for pending ingests
@@ -407,9 +414,7 @@ async def handle_ingest_action(call: CallbackQuery):
         )
 
         # Show module buttons if applicable
-        raw_text = pending.get("raw_text", "")
-        classification_type = pending["classification"].content_type
-        modules_kb = _modules_keyboard(cid, raw_text, classification_type)
+        modules_kb = _modules_keyboard(cid, pending["classification"])
         if modules_kb:
             await call.message.answer(
                 "🔱 *Что сделать с этой записью?*",

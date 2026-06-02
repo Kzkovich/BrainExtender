@@ -24,6 +24,8 @@ class ClassificationResult:
     novelty_percent: int = 100
     confidence: float = 0.9
     raw_title: str = ""
+    task_probability: float = 0.0       # 0.0–1.0, how likely a task should be created
+    suggested_tasks: list[str] = field(default_factory=list)  # pre-formulated task titles
 
 
 def _build_context_summary(storage: BrainStorage) -> str:
@@ -118,8 +120,17 @@ JSON-схема ответа:
   "delta_summary": "<краткое описание что именно нового в этом тексте>",
   "novelty_percent": <0-100>,
   "confidence": <0.0-1.0>,
-  "raw_title": "<предлагаемый заголовок файла>"
+  "raw_title": "<предлагаемый заголовок файла>",
+  "task_probability": <0.0-1.0, вероятность что после этого текста нужно поставить задачу>,
+  "suggested_tasks": ["Готовая формулировка задачи 1", "Задача 2"]
 }}
+
+Правила для task_probability:
+- 0.9+ : явная задача/дедлайн/поручение ("нужно сделать X до пятницы")
+- 0.7–0.9 : есть action items, но неявные ("решили что Кирилл проверит")
+- 0.4–0.7 : возможно нужна задача (встреча с решениями, но задачи неочевидны)
+- < 0.4 : задача не нужна (статья, исследование, личная заметка)
+suggested_tasks — конкретные глагольные формулировки, не более 3, пустой массив если task_probability < 0.4
 
 Правила для target_path:
 - Встречи: work/{{workspace}}/meetings/{{YYYY-MM-DD}}-{{slug}}.md
@@ -165,6 +176,8 @@ JSON-схема ответа:
             "novelty_percent": 100,
             "confidence": 0.3,
             "raw_title": "Заметка",
+            "task_probability": 0.0,
+            "suggested_tasks": [],
         }
 
     return ClassificationResult(**{k: data.get(k, v) for k, v in {
@@ -181,4 +194,6 @@ JSON-схема ответа:
         "novelty_percent": 100,
         "confidence": 0.9,
         "raw_title": "Заметка",
+        "task_probability": 0.0,
+        "suggested_tasks": [],
     }.items()})
