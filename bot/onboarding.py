@@ -1,4 +1,5 @@
 from aiogram import Router
+from bot import persona
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -70,8 +71,7 @@ async def cmd_start(msg: Message, state: FSMContext):
     if is_new:
         await state.set_state(OnboardingStates.choosing_profile)
         await msg.answer(
-            "👋 Привет! Я создам твой *Второй Мозг*. Это займёт минуту.\n\n"
-            "Кто ты?",
+            persona.WELCOME_NEW,
             parse_mode="Markdown",
             reply_markup=_profile_keyboard(),
         )
@@ -125,11 +125,6 @@ async def choose_profile(call: CallbackQuery, state: FSMContext):
         parse_mode="Markdown",
     )
     await call.message.answer(
-        f"🧠 *Второй Мозг создан!*\n\n"
-        f"У тебя 7 дней бесплатного триала.\n\n"
-        f"Попробуй:\n"
-        f"• Напиши сюда конспект встречи или мысль\n"
-        f"• /stats — статистика brain\n"
-        f"• /help — все команды",
+        persona.PROFILE_CHOSEN.format(profile=display),
         parse_mode="Markdown",
     )

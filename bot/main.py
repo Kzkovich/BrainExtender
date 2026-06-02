@@ -19,9 +19,13 @@ from aiogram.types import (
 
 from bot.inbox_reminder import start_inbox_reminder
 from bot.onboarding import router as onboarding_router
+from bot import persona
 from brain.classifier import classify
+from brain.deduplicator import check_before_save, enrich_existing
+from brain.document_parser import parse_document, format_images_for_obsidian
 from brain.formatter import format_content
 from brain.indexer import update_index
+from brain.linker import link_and_inject
 from brain.profiles import ProfileLoader
 from brain.storage import BrainStorage
 from config.settings import settings
@@ -70,10 +74,9 @@ async def handle_ingest(msg: Message):
     user_id = str(msg.from_user.id)
 
     if _is_rate_limited(user_id):
-        await msg.answer("⏳ Слишком много сообщений. Подожди минуту.")
+        await msg.answer(persona.RATE_LIMITED)
         return
 
-    # Check if user exists and has profile set
     with SessionLocal() as db:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -82,51 +85,169 @@ async def handle_ingest(msg: Message):
 
     allowed, reason = await check_quota(user_id, "ingest")
     if not allowed:
-        await msg.answer(f"⚠️ {reason}")
+        await msg.answer(persona.QUOTA_EXCEEDED)
         return
 
-    status_msg = await msg.answer("🔍 Анализирую...")
+    status_msg = await msg.answer(persona.thinking())
 
     try:
-        classification = await classify(msg.text, user_id)
-
-        storage = BrainStorage(user_id)
-        meta = storage.get_meta()
-        profile = ProfileLoader.load(meta.get("profile_id", "universal"))
-        body, frontmatter = await format_content(msg.text, classification, profile, user_id)
-
-        # Store pending ingest
-        import uuid
-        cid = str(uuid.uuid4())[:8]
-        _pending[cid] = {
-            "raw_text": msg.text,
-            "body": body,
-            "frontmatter": frontmatter,
-            "classification": classification,
-            "user_id": user_id,
-        }
-
-        file_type = profile.get_file_type(classification.content_type)
-        type_name = file_type.name if file_type else classification.content_type
-        mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
-        mode_label = "Structured" if classification.note_mode == "structured" else "Personal"
-
-        preview_text = (
-            f"📋 *{classification.raw_title or 'Без названия'}*\n"
-            f"Тип: {type_name}\n"
-            f"Куда: `{classification.target_path}`\n"
-            f"Режим: {mode_icon} {mode_label}\n"
-            f"Уверенность: {int(classification.confidence * 100)}%"
-        )
-
-        await status_msg.edit_text(
-            preview_text,
-            parse_mode="Markdown",
-            reply_markup=_ingest_preview_keyboard(cid),
-        )
+        await _run_ingest_pipeline(msg.text, user_id, status_msg)
     except Exception as e:
         logger.exception("Ingest error")
-        await status_msg.edit_text(f"❌ Ошибка при анализе: {e}")
+        await status_msg.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
+
+
+async def _run_ingest_pipeline(raw_text: str, user_id: str, status_msg, images: list[str] = None):
+    """Shared pipeline: classify → dedup check → format → link → preview."""
+    import uuid
+    storage = BrainStorage(user_id)
+    meta = storage.get_meta()
+    profile = ProfileLoader.load(meta.get("profile_id", "universal"))
+
+    classification = await classify(raw_text, user_id)
+
+    # Deduplication check
+    dedup = await check_before_save(raw_text, classification, storage, user_id)
+
+    body, frontmatter = await format_content(raw_text, classification, profile, user_id)
+
+    # Append images if any
+    if images:
+        body = format_images_for_obsidian(images, body)
+
+    cid = str(uuid.uuid4())[:8]
+    _pending[cid] = {
+        "raw_text": raw_text,
+        "body": body,
+        "frontmatter": frontmatter,
+        "classification": classification,
+        "dedup": dedup,
+        "user_id": user_id,
+        "images": images or [],
+    }
+
+    file_type = profile.get_file_type(classification.content_type)
+    type_name = file_type.name if file_type else classification.content_type
+    mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
+
+    # Build dedup hint
+    dedup_line = ""
+    if dedup.action == "update_existing":
+        dedup_line = f"\n♻️ Обогатит: `{dedup.existing_path}`"
+    elif dedup.action == "link_to_existing":
+        dedup_line = f"\n🔗 Слинкует с: `{dedup.existing_path}`"
+
+    img_line = f"\n🖼 Вложений: {len(images)}" if images else ""
+
+    preview_text = (
+        f"📋 *{classification.raw_title or 'Без названия'}*\n"
+        f"Тип: {type_name}  {mode_icon}\n"
+        f"Куда: `{classification.target_path}`"
+        f"{dedup_line}{img_line}\n"
+        f"Уверенность: {int(classification.confidence * 100)}%"
+    )
+
+    await status_msg.edit_text(
+        preview_text,
+        parse_mode="Markdown",
+        reply_markup=_ingest_preview_keyboard(cid),
+    )
+
+
+@main_router.message(F.document)
+async def handle_document(msg: Message):
+    """Handle PDF, DOCX, TXT files sent to bot."""
+    user_id = str(msg.from_user.id)
+
+    if _is_rate_limited(user_id):
+        await msg.answer(persona.RATE_LIMITED)
+        return
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            await msg.answer("Напиши /start чтобы начать.")
+            return
+
+    allowed, reason = await check_quota(user_id, "ingest")
+    if not allowed:
+        await msg.answer(persona.QUOTA_EXCEEDED)
+        return
+
+    status_msg = await msg.answer(f"📄 {persona.thinking()}")
+
+    try:
+        file = await bot.get_file(msg.document.file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        raw_bytes = file_bytes.read() if hasattr(file_bytes, "read") else bytes(file_bytes)
+
+        storage = BrainStorage(user_id)
+        parsed = await parse_document(raw_bytes, msg.document.file_name or "document", storage, user_id)
+
+        if parsed.error:
+            await status_msg.edit_text(f"{persona.error()}\n\n{parsed.error}")
+            return
+
+        if not parsed.text.strip():
+            await status_msg.edit_text("🌊 Документ пуст или не содержит текста.")
+            return
+
+        content = f"Файл: {msg.document.file_name}\n\n{parsed.text}"
+        if msg.caption:
+            content = f"{msg.caption}\n\n{content}"
+
+        await _run_ingest_pipeline(content, user_id, status_msg, images=parsed.images)
+
+    except Exception as e:
+        logger.exception("Document ingest error")
+        await status_msg.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
+
+
+@main_router.message(F.photo)
+async def handle_photo(msg: Message):
+    """Handle photos — OCR + describe via Claude Vision."""
+    user_id = str(msg.from_user.id)
+
+    if _is_rate_limited(user_id):
+        await msg.answer(persona.RATE_LIMITED)
+        return
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            await msg.answer("Напиши /start чтобы начать.")
+            return
+
+    allowed, reason = await check_quota(user_id, "ingest")
+    if not allowed:
+        await msg.answer(persona.QUOTA_EXCEEDED)
+        return
+
+    status_msg = await msg.answer(f"🖼 {persona.thinking()}")
+
+    try:
+        # Get best quality photo
+        photo = msg.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        raw_bytes = file_bytes.read() if hasattr(file_bytes, "read") else bytes(file_bytes)
+
+        storage = BrainStorage(user_id)
+        parsed = await parse_document(raw_bytes, f"{photo.file_id}.jpg", storage, user_id)
+
+        content = parsed.text
+        if msg.caption:
+            content = f"{msg.caption}\n\n{content}"
+
+        if not content.strip():
+            await status_msg.edit_text("🌊 Не удалось извлечь смысл из изображения.")
+            return
+
+        await _run_ingest_pipeline(content, user_id, status_msg, images=parsed.images)
+
+    except Exception as e:
+        logger.exception("Photo ingest error")
+        await status_msg.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
 
 
 @main_router.callback_query(lambda c: c.data and c.data.startswith("ingest:"))
@@ -153,19 +274,40 @@ async def handle_ingest_action(call: CallbackQuery):
     body = pending["body"]
     frontmatter = pending["frontmatter"]
     frontmatter["note_mode"] = classification.note_mode
+    dedup = pending.get("dedup")
 
     try:
-        storage.write_file(classification.target_path, body, frontmatter)
-        update_index(storage, classification.target_path, frontmatter, body)
+        target_path = classification.target_path
+
+        if dedup and dedup.action == "update_existing" and dedup.existing_path:
+            # Enrich existing note
+            try:
+                existing_fm, existing_body = storage.read_file(dedup.existing_path)
+                merged_body = await enrich_existing(
+                    existing_body, pending["raw_text"],
+                    dedup.merge_hint or "добавь новую информацию", user_id
+                )
+                storage.write_file(dedup.existing_path, merged_body, existing_fm)
+                update_index(storage, dedup.existing_path, existing_fm, merged_body)
+                target_path = dedup.existing_path
+            except Exception:
+                # Fallback to create new
+                storage.write_file(target_path, body, frontmatter)
+                update_index(storage, target_path, frontmatter, body)
+        else:
+            storage.write_file(target_path, body, frontmatter)
+            update_index(storage, target_path, frontmatter, body)
+
         _pending.pop(cid, None)
 
+        action_label = "Обогатил" if dedup and dedup.action == "update_existing" else "Сохранил"
         await call.message.edit_text(
-            f"✅ *Сохранено!*\n`{classification.target_path}`",
+            f"⚓ *{action_label} в глубинах памяти.*\n`{target_path}`",
             parse_mode="Markdown",
         )
     except Exception as e:
         logger.exception("Save error")
-        await call.message.edit_text(f"❌ Ошибка сохранения: {e}")
+        await call.message.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
 
 
 @main_router.message(Command("stats"))
@@ -180,9 +322,9 @@ async def cmd_stats(msg: Message):
     by_ws = stats.get("by_workspace", {})
 
     lines = [
-        f"🧠 *Статистика brain*",
+        persona.STATS_HEADER,
         f"",
-        f"📁 Всего файлов: {stats.get('total_files', 0)}",
+        f"📁 Всего записей: {stats.get('total_files', 0)}",
         f"",
         f"*По типам:*",
     ]
@@ -324,18 +466,7 @@ async def cmd_billing(msg: Message):
 
 @main_router.message(Command("help"))
 async def cmd_help(msg: Message):
-    await msg.answer(
-        "🧠 *Расширитель Мозга — команды*\n\n"
-        "Просто напиши любой текст — сохраню в brain автоматически.\n\n"
-        "/start — статус brain\n"
-        "/stats — статистика\n"
-        "/profile — сменить профиль\n"
-        "/workspace — переключить воркспейс\n"
-        "/inbox — необработанные файлы\n"
-        "/billing — тариф и расход\n"
-        "/help — эта справка",
-        parse_mode="Markdown",
-    )
+    await msg.answer(persona.HELP_TEXT, parse_mode="Markdown")
 
 
 async def main():

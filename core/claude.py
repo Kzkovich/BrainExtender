@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 import anthropic
 
@@ -46,4 +47,40 @@ async def call_claude(
     cost = _calc_cost(tokens_in, tokens_out)
 
     await log_usage(user_id, operation, tokens_in, tokens_out, m, cost)
+    return text, cost
+
+
+async def call_claude_vision(
+    system: str,
+    image_b64: str,
+    media_type: str,
+    user_id: str,
+    model: Optional[str] = None,
+) -> tuple[str, float]:
+    """Send image to Claude Vision. Returns (description, cost_usd)."""
+    m = model or settings.DEFAULT_MODEL
+
+    response = _client.messages.create(
+        model=m,
+        max_tokens=2048,
+        system=system,
+        messages=[{
+            "role": "user",
+            "content": [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": image_b64,
+                },
+            }],
+        }],
+    )
+
+    text = response.content[0].text
+    tokens_in = response.usage.input_tokens
+    tokens_out = response.usage.output_tokens
+    cost = _calc_cost(tokens_in, tokens_out)
+
+    await log_usage(user_id, "ingest", tokens_in, tokens_out, m, cost)
     return text, cost
