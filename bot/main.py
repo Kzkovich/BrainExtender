@@ -29,7 +29,7 @@ from brain.linker import link_and_inject
 from brain.profiles import ProfileLoader
 from brain.storage import BrainStorage
 from config.settings import settings
-from core.quotas import check_quota
+from core.quotas import check_quota, get_usage_since
 from db.models import SessionLocal, User, create_tables
 
 logging.basicConfig(level=logging.INFO)
@@ -100,6 +100,8 @@ async def handle_ingest(msg: Message):
 async def _run_ingest_pipeline(raw_text: str, user_id: str, status_msg, images: list[str] = None):
     """Shared pipeline: classify → dedup check → format → link → preview."""
     import uuid
+    from datetime import datetime as dt
+    pipeline_start = dt.utcnow()
     storage = BrainStorage(user_id)
     meta = storage.get_meta()
     profile = ProfileLoader.load(meta.get("profile_id", "universal"))
@@ -124,6 +126,7 @@ async def _run_ingest_pipeline(raw_text: str, user_id: str, status_msg, images: 
         "dedup": dedup,
         "user_id": user_id,
         "images": images or [],
+        "pipeline_start": pipeline_start,
     }
 
     file_type = profile.get_file_type(classification.content_type)
@@ -295,7 +298,9 @@ async def handle_ingest_action(call: CallbackQuery):
     dedup = pending.get("dedup")
 
     try:
+        from datetime import datetime as dt
         target_path = classification.target_path
+        pipeline_start = pending.get("pipeline_start", dt.utcnow())
 
         if dedup and dedup.action == "update_existing" and dedup.existing_path:
             # Enrich existing note
@@ -318,9 +323,15 @@ async def handle_ingest_action(call: CallbackQuery):
 
         _pending.pop(cid, None)
 
+        usage = get_usage_since(user_id, pipeline_start)
+        cost_line = (
+            f"\n💸 `{usage.tokens_in + usage.tokens_out:,}` токенов"
+            f" · `${usage.cost_usd:.4f}`"
+        )
+
         action_label = "Обогатил" if dedup and dedup.action == "update_existing" else "Сохранил"
         await call.message.edit_text(
-            f"⚓ *{action_label} в глубинах памяти.*\n`{target_path}`",
+            f"⚓ *{action_label} в глубинах памяти.*\n`{target_path}`{cost_line}",
             parse_mode="Markdown",
         )
     except Exception as e:
@@ -459,11 +470,24 @@ async def cmd_billing(msg: Message):
         tariff = user.tariff
         trial_ends = user.trial_ends_at
 
-    from core.quotas import _cost_today, _count_today, QUOTAS
-    quota = QUOTAS.get(tariff, QUOTAS["free"])
+    from core.quotas import _cost_today, _count_today, QUOTAS, _get_tariff
+    effective_tariff = _get_tariff(user_id)
+    quota = QUOTAS.get(effective_tariff, QUOTAS["free"])
     cost = _cost_today(user_id)
     ingests = _count_today(user_id, "ingest")
     queries = _count_today(user_id, "query")
+
+    if effective_tariff == "owner":
+        await msg.answer(
+            f"💳 *Биллинг*\n\n"
+            f"Тариф: *OWNER* ∞\n\n"
+            f"Сегодня:\n"
+            f"• Ингестов: {ingests}\n"
+            f"• Запросов: {queries}\n"
+            f"• API-расход: ${cost:.4f}",
+            parse_mode="Markdown",
+        )
+        return
 
     trial_info = ""
     if tariff == "free" and trial_ends:

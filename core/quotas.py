@@ -1,8 +1,31 @@
 from datetime import datetime, date
+from typing import NamedTuple
 
 from sqlalchemy import func
 
+from config.settings import settings
 from db.models import SessionLocal, UsageLog, User
+
+
+class UsageSummary(NamedTuple):
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+
+
+def get_usage_since(user_id: str, since: datetime) -> UsageSummary:
+    """Sum tokens and cost for a user since a given datetime."""
+    with SessionLocal() as db:
+        row = (
+            db.query(
+                func.coalesce(func.sum(UsageLog.tokens_in), 0),
+                func.coalesce(func.sum(UsageLog.tokens_out), 0),
+                func.coalesce(func.sum(UsageLog.cost_usd), 0.0),
+            )
+            .filter(UsageLog.user_id == user_id, UsageLog.timestamp >= since)
+            .one()
+        )
+    return UsageSummary(int(row[0]), int(row[1]), float(row[2]))
 
 QUOTAS: dict[str, dict] = {
     "free": {
@@ -23,10 +46,18 @@ QUOTAS: dict[str, dict] = {
         "max_brain_size_mb": 5000,
         "max_api_cost_per_day_usd": 10.00,
     },
+    "owner": {
+        "ingests_per_day": 999_999,
+        "queries_per_day": 999_999,
+        "max_brain_size_mb": 999_999,
+        "max_api_cost_per_day_usd": 999_999.00,
+    },
 }
 
 
 def _get_tariff(user_id: str) -> str:
+    if user_id in settings.owner_ids:
+        return "owner"
     with SessionLocal() as db:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:

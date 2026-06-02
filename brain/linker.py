@@ -49,6 +49,7 @@ async def find_related(
     if not candidates:
         return []
 
+    from config.settings import settings
     from core.claude import call_claude
 
     candidates_text = "\n".join(
@@ -76,6 +77,7 @@ async def find_related(
             user_id=user_id,
             operation="link",
             json_mode=True,
+            model=settings.FAST_MODEL,
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):

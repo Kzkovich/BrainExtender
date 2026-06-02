@@ -11,7 +11,12 @@ _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 _LANG = "\n\nОтвечай строго на русском языке."
 
 
-def _calc_cost(tokens_in: int, tokens_out: int) -> float:
+def _calc_cost(tokens_in: int, tokens_out: int, model: str) -> float:
+    if model == settings.FAST_MODEL:
+        return (
+            tokens_in * settings.HAIKU_INPUT_PRICE_PER_1M / 1_000_000
+            + tokens_out * settings.HAIKU_OUTPUT_PRICE_PER_1M / 1_000_000
+        )
     return (
         tokens_in * settings.CLAUDE_INPUT_PRICE_PER_1M / 1_000_000
         + tokens_out * settings.CLAUDE_OUTPUT_PRICE_PER_1M / 1_000_000
@@ -25,6 +30,7 @@ async def call_claude(
     operation: str,
     model: "Optional[str]" = None,
     json_mode: bool = False,
+    max_tokens: int = 4096,
 ) -> tuple[str, float]:
     """Returns (response_text, cost_usd). Logs usage automatically."""
     m = model or settings.DEFAULT_MODEL
@@ -36,7 +42,7 @@ async def call_claude(
 
     response = _client.messages.create(
         model=m,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         system=full_system,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -44,7 +50,7 @@ async def call_claude(
     text = response.content[0].text
     tokens_in = response.usage.input_tokens
     tokens_out = response.usage.output_tokens
-    cost = _calc_cost(tokens_in, tokens_out)
+    cost = _calc_cost(tokens_in, tokens_out, m)
 
     await log_usage(user_id, operation, tokens_in, tokens_out, m, cost)
     return text, cost
@@ -80,7 +86,7 @@ async def call_claude_vision(
     text = response.content[0].text
     tokens_in = response.usage.input_tokens
     tokens_out = response.usage.output_tokens
-    cost = _calc_cost(tokens_in, tokens_out)
+    cost = _calc_cost(tokens_in, tokens_out, m)
 
     await log_usage(user_id, "ingest", tokens_in, tokens_out, m, cost)
     return text, cost

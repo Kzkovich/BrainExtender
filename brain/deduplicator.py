@@ -9,6 +9,7 @@ from typing import Optional
 from brain.classifier import ClassificationResult
 from brain.indexer import get_manifest
 from brain.storage import BrainStorage
+from config.settings import settings
 from core.claude import call_claude
 
 
@@ -92,6 +93,7 @@ async def check_before_save(
             user_id=user_id,
             operation="ingest",
             json_mode=True,
+            model=settings.FAST_MODEL,
         )
         cleaned = response.strip()
         if cleaned.startswith("```"):
@@ -131,5 +133,6 @@ async def enrich_existing(
         user_message=f"Существующая запись:\n{existing_body}\n\n---\nНовый контент:\n{new_content}\n\nЧто добавить: {merge_hint}",
         user_id=user_id,
         operation="format",
+        max_tokens=8192,
     )
     return merged

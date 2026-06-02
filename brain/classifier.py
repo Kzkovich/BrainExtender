@@ -5,6 +5,7 @@ from typing import Optional
 
 from brain.profiles import ProfileLoader
 from brain.storage import BrainStorage
+from config.settings import settings
 from core.claude import call_claude
 
 
@@ -129,9 +130,11 @@ JSON-схема ответа:
 - Личные заметки: personal/interests/{{slug}}.md
 - note_mode=personal → всегда в personal/"""
 
+    classify_input = raw_text[:settings.CLASSIFIER_INPUT_LIMIT]
+
     response_text, _ = await call_claude(
         system=system_prompt,
-        user_message=raw_text,
+        user_message=classify_input,
         user_id=user_id,
         operation="ingest",
         json_mode=True,
