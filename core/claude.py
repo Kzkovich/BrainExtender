@@ -8,6 +8,8 @@ from core.quotas import log_usage
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+_LANG = "\n\nОтвечай строго на русском языке."
+
 
 def _calc_cost(tokens_in: int, tokens_out: int) -> float:
     return (
@@ -24,20 +26,18 @@ async def call_claude(
     model: "Optional[str]" = None,
     json_mode: bool = False,
 ) -> tuple[str, float]:
-    """
-    Returns (response_text, cost_usd).
-    Logs usage automatically.
-    """
+    """Returns (response_text, cost_usd). Logs usage automatically."""
     m = model or settings.DEFAULT_MODEL
 
-    extra = {}
     if json_mode:
-        extra["system"] = system + "\n\nОтвечай ТОЛЬКО валидным JSON без дополнительного текста."
+        full_system = system + "\n\nОтвечай ТОЛЬКО валидным JSON без дополнительного текста." + _LANG
+    else:
+        full_system = system + _LANG
 
     response = _client.messages.create(
         model=m,
         max_tokens=4096,
-        system=extra.get("system", system),
+        system=full_system,
         messages=[{"role": "user", "content": user_message}],
     )
 
@@ -63,7 +63,7 @@ async def call_claude_vision(
     response = _client.messages.create(
         model=m,
         max_tokens=2048,
-        system=system,
+        system=system + _LANG,
         messages=[{
             "role": "user",
             "content": [{
