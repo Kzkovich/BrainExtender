@@ -6,7 +6,7 @@ services:
     command: python3 bot/main.py
     env_file: .env
     volumes:
-      - brain_data:/app/data
+      - /srv/brain:/app/data
       - ./profiles:/app/profiles:ro
       - ./templates:/app/templates:ro
     depends_on:
@@ -21,17 +21,13 @@ services:
     command: python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8001
     env_file: .env
     volumes:
-      - brain_data:/app/data
+      - /srv/brain:/app/data
       - ./profiles:/app/profiles:ro
       - ./templates:/app/templates:ro
     ports:
       - "127.0.0.1:8001:8001"   # Only localhost — nginx proxies externally
     networks:
       - brain
-
-volumes:
-  brain_data:
-    driver: local
 
 networks:
   brain:

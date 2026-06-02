@@ -181,7 +181,7 @@ async def handle_document(msg: Message):
     try:
         await status_msg.edit_text(f"📄 *{fname}*\n⬇️ Скачиваю...", parse_mode="Markdown")
         file = await bot.get_file(msg.document.file_id)
-        file_bytes = await bot.download_file(file.file_path)
+        file_bytes = await bot.download_file(file.file_path, timeout=120)
         raw_bytes = file_bytes.read() if hasattr(file_bytes, "read") else bytes(file_bytes)
 
         await status_msg.edit_text(f"📄 *{fname}*\n🔍 Извлекаю текст и изображения...", parse_mode="Markdown")
@@ -247,7 +247,7 @@ async def handle_photo(msg: Message):
         # Get best quality photo
         photo = msg.photo[-1]
         file = await bot.get_file(photo.file_id)
-        file_bytes = await bot.download_file(file.file_path)
+        file_bytes = await bot.download_file(file.file_path, timeout=120)
         raw_bytes = file_bytes.read() if hasattr(file_bytes, "read") else bytes(file_bytes)
 
         storage = BrainStorage(user_id)
