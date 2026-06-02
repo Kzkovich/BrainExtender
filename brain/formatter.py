@@ -10,6 +10,7 @@ from brain.classifier import ClassificationResult
 from brain.linker import link_and_inject
 from brain.profiles import Profile
 from brain.storage import BrainStorage
+from config.settings import settings
 from core.claude import call_claude
 
 
@@ -77,12 +78,17 @@ async def format_content(
 Если данных нет — используй null или пустой список."""
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
+    is_large = len(raw_text) > settings.FORMATTER_INPUT_LIMIT
+    format_input = raw_text[:settings.FORMATTER_INPUT_LIMIT]
+
     response_text, cost = await call_claude(
         system=system_prompt,
-        user_message=raw_text,
+        user_message=format_input,
         user_id=user_id,
         operation="format",
         json_mode=True,
+        model=settings.FAST_MODEL,
+        max_tokens=4096,
     )
 
     try:
@@ -93,21 +99,31 @@ async def format_content(
                 cleaned = cleaned[4:]
             cleaned = cleaned.rsplit("```", 1)[0].strip()
         fields = json.loads(cleaned)
+        parse_ok = True
     except json.JSONDecodeError:
         fields = {}
+        parse_ok = False
+
+    if not parse_ok:
+        template_path = "templates/universal_note.md"
 
     fields.setdefault("date", today)
     fields.setdefault("title", classification.raw_title or "Заметка")
     fields.setdefault("workspace", classification.workspace)
     fields.setdefault("feature_slug", classification.feature_slug)
-    fields.setdefault("narrative", raw_text)
+    fields.setdefault("narrative", raw_text if not is_large else format_input)
     fields.setdefault("people", classification.people_mentioned)
     fields.setdefault("key_decisions", classification.key_decisions)
     fields.setdefault("action_items", [])
 
     body = _render_template(template_path, fields)
+
+    # Append full source text when doc was truncated for extraction
+    if is_large:
+        body += f"\n\n---\n\n## Исходный текст\n\n{raw_text}"
+
     tokens_used = len(response_text) // 4
-    frontmatter = _build_frontmatter(classification, fields.get("title", ""), user_id, model="claude-sonnet-4-6", tokens=tokens_used)
+    frontmatter = _build_frontmatter(classification, fields.get("title", ""), user_id, model=settings.FAST_MODEL, tokens=tokens_used)
 
     # Inject [[wikilinks]] so Obsidian graph shows connections
     storage = BrainStorage(user_id)

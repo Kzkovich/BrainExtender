@@ -123,7 +123,15 @@ async def enrich_existing(
     merge_hint: str,
     user_id: str,
 ) -> str:
-    """Merge new content into existing note body."""
+    """Merge new content into existing note body.
+    Large documents are appended as a dated section to avoid expensive rewrites."""
+    from datetime import datetime
+
+    # If combined content is too large, just append — no Claude call needed
+    if len(existing_body) + len(new_content) > settings.ENRICH_APPEND_THRESHOLD:
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        return existing_body.rstrip() + f"\n\n---\n\n## Обновлено {date_str}\n\n{new_content}"
+
     system = """Ты редактор second brain. Тебе дана существующая запись и новый контент.
 Обогати существующую запись новой информацией — добавь новые факты, обнови данные, дополни разделы.
 Не удаляй существующий контент. Верни полное обновлённое тело заметки (без frontmatter)."""
@@ -133,6 +141,7 @@ async def enrich_existing(
         user_message=f"Существующая запись:\n{existing_body}\n\n---\nНовый контент:\n{new_content}\n\nЧто добавить: {merge_hint}",
         user_id=user_id,
         operation="format",
+        model=settings.FAST_MODEL,
         max_tokens=8192,
     )
     return merged

@@ -47,8 +47,9 @@ async def parse_pdf(file_bytes: bytes, filename: str, storage) -> ParsedDocument
         img_count = 0
 
         for page_num, page in enumerate(doc):
-            # Text
+            # Text — strip null bytes and control chars that break the API
             text = page.get_text("text").strip()
+            text = "".join(ch for ch in text if ch >= " " or ch in "\n\t")
             if text:
                 text_parts.append(f"--- Страница {page_num + 1} ---\n{text}")
 

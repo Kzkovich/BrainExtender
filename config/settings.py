@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     # Max chars of raw text sent to classifier (covers ~3K tokens)
     CLASSIFIER_INPUT_LIMIT: int = 12000
+    # Max chars sent to formatter for field extraction (~2K tokens)
+    FORMATTER_INPUT_LIMIT: int = 8000
+    # Combined chars threshold above which enrich_existing appends instead of AI-merges
+    ENRICH_APPEND_THRESHOLD: int = 20000
 
     # Todoist integration (optional)
     TODOIST_API_KEY: str = ""
