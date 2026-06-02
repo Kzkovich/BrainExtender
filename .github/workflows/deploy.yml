@@ -24,10 +24,10 @@ jobs:
             git pull origin main
 
             echo "=== Building and restarting containers ==="
-            docker compose up -d --build --remove-orphans
+            docker-compose up -d --build --remove-orphans
 
             echo "=== Cleanup old images ==="
-            docker image prune -f
+            docker image prune -f || true
 
             echo "=== Health check ==="
             sleep 5
