@@ -26,10 +26,9 @@ from brain.classifier import classify
 from brain.deduplicator import check_before_save, enrich_existing
 from brain.document_parser import parse_document, format_images_for_obsidian
 from brain.formatter import format_content
-from brain.indexer import update_index
+from brain.indexer import update_index, update_brain_summary
 from brain.linker import link_and_inject
 from brain.profiles import ProfileLoader
-from brain.splitter import analyze_and_split
 from brain.storage import BrainStorage
 from config.settings import settings
 from core.quotas import check_quota, get_usage_since
@@ -129,75 +128,79 @@ async def _run_ingest_pipeline(raw_text: str, user_id: str, status_msg, images: 
     meta = storage.get_meta()
     profile = ProfileLoader.load(meta.get("profile_id", "universal"))
 
-    # --- Step 1: Check if content should be split ---
     await status_msg.edit_text("🔱 Философствую над содержимым...")
-    split = await analyze_and_split(raw_text, user_id)
 
-    if split.should_split and len(split.chunks) > 1:
-        # Multi-chunk flow: process each chunk separately
+    # One omnibus classify call — returns split decision + all metadata
+    cid = await _process_single_chunk(raw_text, user_id, storage, profile, images=images)
+    pending = _pending[cid]
+    classification = pending["classification"]
+
+    if classification.should_split and len(classification.split_chunks) > 1:
+        # Multi-chunk flow — process each chunk from classify result
+        chunks = classification.split_chunks
         await status_msg.edit_text(
-            f"🌊 *Вижу {len(split.chunks)} смысловых потока.*\n{split.reason}\n\nОбрабатываю каждый...",
+            f"🌊 *Вижу {len(chunks)} смысловых потока.*\nОбрабатываю каждый...",
             parse_mode="Markdown",
         )
+        # Remove the initial single-chunk pending (it was just to get split info)
+        _pending.pop(cid, None)
+
         results = []
-        for i, chunk in enumerate(split.chunks, 1):
+        for i, chunk in enumerate(chunks, 1):
             await status_msg.edit_text(
-                f"🔱 Поток {i}/{len(split.chunks)}: *{chunk.title}*",
+                f"🔱 Поток {i}/{len(chunks)}: *{chunk.get('title', '...')}*",
                 parse_mode="Markdown",
             )
-            cid = await _process_single_chunk(
-                chunk.content, user_id, storage, profile,
+            chunk_cid = await _process_single_chunk(
+                chunk.get("content", ""), user_id, storage, profile,
                 images=images if i == 1 else None,
-                hint=chunk.hint,
+                hint=chunk.get("hint", ""),
             )
-            results.append((chunk.title, cid))
+            results.append((chunk.get("title", ""), chunk_cid))
 
-        # Show summary with all chunks as separate messages
-        for title, cid in results:
-            pending = _pending.get(cid)
-            if not pending:
+        for title, chunk_cid in results:
+            p = _pending.get(chunk_cid)
+            if not p:
                 continue
-            cl = pending["classification"]
+            cl = p["classification"]
             await status_msg.answer(
                 f"📋 *{cl.raw_title or title}*\nКуда: `{cl.target_path}`",
                 parse_mode="Markdown",
-                reply_markup=_ingest_preview_keyboard(cid),
+                reply_markup=_ingest_preview_keyboard(chunk_cid),
             )
         await status_msg.edit_text(
-            f"🌊 *{len(results)} потока готовы к сохранению.* Проверь каждый выше.",
+            f"🌊 *{len(results)} потока готовы.* Проверь каждый выше.",
             parse_mode="Markdown",
         )
-    else:
-        # Single chunk flow
-        cid = await _process_single_chunk(raw_text, user_id, storage, profile, images=images)
-        pending = _pending[cid]
-        classification = pending["classification"]
-        dedup = pending["dedup"]
+        return
 
-        file_type = profile.get_file_type(classification.content_type)
-        type_name = file_type.name if file_type else classification.content_type
-        mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
+    # Single chunk flow
+    dedup = pending["dedup"]
 
-        dedup_line = ""
-        if dedup.action == "update_existing":
-            dedup_line = f"\n♻️ Обогатит: `{dedup.existing_path}`"
-        elif dedup.action == "link_to_existing":
-            dedup_line = f"\n🔗 Слинкует с: `{dedup.existing_path}`"
+    file_type = profile.get_file_type(classification.content_type)
+    type_name = file_type.name if file_type else classification.content_type
+    mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
 
-        img_line = f"\n🖼 Вложений: {len(images)}" if images else ""
+    dedup_line = ""
+    if dedup.action == "update_existing":
+        dedup_line = f"\n♻️ Обогатит: `{dedup.existing_path}`"
+    elif dedup.action == "link_to_existing":
+        dedup_line = f"\n🔗 Слинкует с: `{dedup.existing_path}`"
 
-        preview_text = (
-            f"📋 *{classification.raw_title or 'Без названия'}*\n"
-            f"Тип: {type_name}  {mode_icon}\n"
-            f"Куда: `{classification.target_path}`"
-            f"{dedup_line}{img_line}\n"
-            f"Уверенность: {int(classification.confidence * 100)}%"
-        )
-        await status_msg.edit_text(
-            preview_text,
-            parse_mode="Markdown",
-            reply_markup=_ingest_preview_keyboard(cid),
-        )
+    img_line = f"\n🖼 Вложений: {len(images)}" if images else ""
+
+    preview_text = (
+        f"📋 *{classification.raw_title or 'Без названия'}*\n"
+        f"Тип: {type_name}  {mode_icon}\n"
+        f"Куда: `{classification.target_path}`"
+        f"{dedup_line}{img_line}\n"
+        f"Уверенность: {int(classification.confidence * 100)}%"
+    )
+    await status_msg.edit_text(
+        preview_text,
+        parse_mode="Markdown",
+        reply_markup=_ingest_preview_keyboard(cid),
+    )
 
 
 async def _process_single_chunk(
@@ -380,7 +383,15 @@ async def handle_ingest_action(call: CallbackQuery):
         target_path = classification.target_path
         pipeline_start = pending.get("pipeline_start", dt.utcnow())
 
-        if dedup and dedup.action == "update_existing" and dedup.existing_path:
+        # Records — append-only, never overwrite
+        if classification.content_type in storage.RECORD_TYPES:
+            storage.append_to_record(
+                classification.content_type, body,
+                title=classification.raw_title,
+            )
+            # Also index as regular file for manifest/search
+            update_index(storage, target_path, frontmatter, body)
+        elif dedup and dedup.action == "update_existing" and dedup.existing_path:
             # Enrich existing note
             try:
                 existing_fm, existing_body = storage.read_file(dedup.existing_path)
@@ -392,13 +403,13 @@ async def handle_ingest_action(call: CallbackQuery):
                 update_index(storage, dedup.existing_path, existing_fm, merged_body)
                 target_path = dedup.existing_path
             except Exception:
-                # Fallback to create new
                 storage.write_file(target_path, body, frontmatter)
                 update_index(storage, target_path, frontmatter, body)
         else:
             storage.write_file(target_path, body, frontmatter)
             update_index(storage, target_path, frontmatter, body)
 
+        update_brain_summary(storage)
         _pending.pop(cid, None)
 
         usage = get_usage_since(user_id, pipeline_start)

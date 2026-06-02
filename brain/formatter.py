@@ -81,13 +81,21 @@ async def format_content(
     is_large = len(raw_text) > settings.FORMATTER_INPUT_LIMIT
     format_input = raw_text[:settings.FORMATTER_INPUT_LIMIT]
 
+    # Simple types → Haiku; complex types (meeting, feature, research) → Sonnet
+    _SIMPLE_TYPES = {"note", "personal_note", "task", "personal"}
+    format_model = (
+        settings.FAST_MODEL
+        if classification.content_type in _SIMPLE_TYPES
+        else None  # None = DEFAULT_MODEL (Sonnet)
+    )
+
     response_text, cost = await call_claude(
         system=system_prompt,
         user_message=format_input,
         user_id=user_id,
         operation="format",
         json_mode=True,
-        model=settings.FAST_MODEL,
+        model=format_model,
         max_tokens=4096,
     )
 

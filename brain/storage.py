@@ -134,6 +134,38 @@ class BrainStorage:
         src.rename(dst)
         return str(dst)
 
+    RECORD_TYPES = ("record_decision", "record_agreement", "record_fact", "record_principle")
+
+    def append_to_record(self, record_type: str, content: str, title: str = ""):
+        """
+        Append-only write to records/ files. Records are immutable history —
+        nothing is ever overwritten, only appended.
+        """
+        type_map = {
+            "record_decision": "decisions.md",
+            "record_agreement": "agreements.md",
+            "record_fact": "facts.md",
+            "record_principle": "principles.md",
+        }
+        filename = type_map.get(record_type, "notes.md")
+        record_path = self.root / "records" / filename
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Init file with header if new
+        if not record_path.exists():
+            record_path.write_text(
+                f"# {filename.replace('.md', '').capitalize()}\n\n"
+                f"*Append-only. Записи не удаляются и не редактируются.*\n\n",
+                encoding="utf-8",
+            )
+
+        from datetime import datetime
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        heading = f"### {title}" if title else f"### {timestamp}"
+        entry = f"\n---\n{heading}\n*{timestamp} UTC*\n\n{content.strip()}\n"
+        with record_path.open("a", encoding="utf-8") as f:
+            f.write(entry)
+
     @staticmethod
     def _sanitize_frontmatter_value(value) -> str:
         if isinstance(value, (list, dict)):

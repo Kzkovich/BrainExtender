@@ -24,22 +24,32 @@ class ClassificationResult:
     novelty_percent: int = 100
     confidence: float = 0.9
     raw_title: str = ""
-    task_probability: float = 0.0       # 0.0–1.0, how likely a task should be created
-    suggested_tasks: list[str] = field(default_factory=list)  # pre-formulated task titles
+    task_probability: float = 0.0
+    suggested_tasks: list[str] = field(default_factory=list)
+    should_split: bool = False
+    split_chunks: list[dict] = field(default_factory=list)  # [{title, content, chunk_type, hint}]
 
 
 def _build_context_summary(storage: BrainStorage) -> str:
+    """Use compact _brain_summary.md if available (faster, cheaper). Fallback to manifest."""
+    summary_path = storage.root / "_index" / "_brain_summary.md"
+    if summary_path.exists():
+        try:
+            return summary_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    # Fallback: build from manifest
     try:
         manifest_path = storage.root / "_index" / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
-        files = manifest.get("files", [])[-20:]
+        files = manifest.get("files", [])[-15:]
         if not files:
             return "Brain пуст — это первые записи."
-        lines = [f"- [{f['type']}] {f['path']} (обновлено {f.get('date_updated', '?')[:10]})" for f in files]
         stats = manifest.get("stats", {})
+        lines = [f"- [{f['type']}] {f.get('summary', '')[:60]}" for f in files]
         return (
-            f"Статистика brain: {stats.get('total_files', 0)} файлов.\n"
-            f"Последние файлы:\n" + "\n".join(lines)
+            f"Записей в brain: {stats.get('total_files', 0)}\n"
+            f"Последние:\n" + "\n".join(lines)
         )
     except Exception:
         return "Brain пуст."
@@ -121,16 +131,25 @@ JSON-схема ответа:
   "novelty_percent": <0-100>,
   "confidence": <0.0-1.0>,
   "raw_title": "<предлагаемый заголовок файла>",
-  "task_probability": <0.0-1.0, вероятность что после этого текста нужно поставить задачу>,
-  "suggested_tasks": ["Готовая формулировка задачи 1", "Задача 2"]
+  "task_probability": <0.0-1.0, вероятность что нужно поставить задачу>,
+  "suggested_tasks": ["Готовая формулировка задачи 1", "Задача 2"],
+  "should_split": <true если текст содержит ПРИНЦИПИАЛЬНО разные темы для отдельных заметок>,
+  "split_chunks": []
 }}
 
 Правила для task_probability:
 - 0.9+ : явная задача/дедлайн/поручение ("нужно сделать X до пятницы")
 - 0.7–0.9 : есть action items, но неявные ("решили что Кирилл проверит")
-- 0.4–0.7 : возможно нужна задача (встреча с решениями, но задачи неочевидны)
+- 0.4–0.7 : возможно нужна задача
 - < 0.4 : задача не нужна (статья, исследование, личная заметка)
 suggested_tasks — конкретные глагольные формулировки, не более 3, пустой массив если task_probability < 0.4
+
+Правила для should_split / split_chunks:
+- should_split=true ТОЛЬКО если в тексте несколько ПРИНЦИПИАЛЬНО разных тем (встреча + отдельное исследование)
+- should_split=false если единая тема, пусть и длинная (встреча с action items — это одна заметка)
+- Если should_split=true, заполни split_chunks:
+  [{"title": "...", "content": "фрагмент текста", "chunk_type": "meeting|research|decision|note", "hint": "подсказка"}]
+- Максимум 4 чанка. Если doubt — ставь should_split=false
 
 Правила для target_path:
 - Встречи: work/{{workspace}}/meetings/{{YYYY-MM-DD}}-{{slug}}.md
@@ -149,6 +168,7 @@ suggested_tasks — конкретные глагольные формулиро
         user_id=user_id,
         operation="ingest",
         json_mode=True,
+        model=settings.FAST_MODEL,  # Routing task — Haiku достаточно
     )
 
     try:
@@ -178,6 +198,8 @@ suggested_tasks — конкретные глагольные формулиро
             "raw_title": "Заметка",
             "task_probability": 0.0,
             "suggested_tasks": [],
+            "should_split": False,
+            "split_chunks": [],
         }
 
     return ClassificationResult(**{k: data.get(k, v) for k, v in {
@@ -196,4 +218,6 @@ suggested_tasks — конкретные глагольные формулиро
         "raw_title": "Заметка",
         "task_probability": 0.0,
         "suggested_tasks": [],
+        "should_split": False,
+        "split_chunks": [],
     }.items()})

@@ -33,6 +33,21 @@ file_types:
     template_path: "templates/po_note.md"
     note_mode: personal
 
+  - id: record_decision
+    name: "Решение (неизменяемая запись)"
+    template_path: "templates/po_note.md"
+    note_mode: structured
+
+  - id: record_agreement
+    name: "Договорённость (неизменяемая запись)"
+    template_path: "templates/po_note.md"
+    note_mode: structured
+
+  - id: record_fact
+    name: "Факт о продукте (неизменяемая запись)"
+    template_path: "templates/po_note.md"
+    note_mode: structured
+
 domain_vocabulary:
   roles:
     - PO
@@ -68,6 +83,9 @@ default_workspaces:
 
 classifier_hints: |
   Пользователь — Product Owner. При классификации учитывай:
+  - Явный факт о продукте, технологии или команде который нужно зафиксировать навсегда → type=record_fact
+  - Договорённость между командами/людьми → type=record_agreement (в дополнение к type=agreement)
+  - Архитектурное/продуктовое решение которое не должно потеряться → type=record_decision
   - Любая зафиксированная договорённость с бизнесом / тех-командой → type=agreement
   - Конспект встречи с action items → type=meeting
   - Описание новой возможности продукта → type=feature

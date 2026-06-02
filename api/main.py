@@ -13,7 +13,7 @@ from typing import Optional
 
 from brain.classifier import classify
 from brain.formatter import format_content
-from brain.indexer import update_index
+from brain.indexer import update_index, update_brain_summary
 from brain.linker import link_and_inject
 from brain.profiles import ProfileLoader
 from brain.storage import BrainStorage
@@ -91,6 +91,7 @@ async def ingest(req: IngestRequest):
     if req.auto_save:
         storage.write_file(classification.target_path, body, frontmatter)
         update_index(storage, classification.target_path, frontmatter, body)
+        update_brain_summary(storage)
 
     return IngestResponse(
         saved=req.auto_save,

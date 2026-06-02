@@ -54,6 +54,55 @@ def get_manifest(storage: BrainStorage) -> dict:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
+def update_brain_summary(storage: BrainStorage):
+    """
+    Write a compact _index/_brain_summary.md used by classifier as context.
+    Much cheaper than passing full manifest (~50KB) in prompts.
+    """
+    manifest_path = storage.root / "_index" / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    files = manifest.get("files", [])
+    stats = manifest.get("stats", {})
+
+    # Last 10 entries (most recent first)
+    recent = sorted(files, key=lambda f: f.get("date_updated", ""), reverse=True)[:10]
+
+    # Active feature slugs
+    feature_slugs = sorted({
+        f["feature_slug"] for f in files
+        if f.get("feature_slug") and f.get("type") in ("feature", "decision", "meeting")
+    })
+
+    by_type = stats.get("by_type", {})
+    by_ws = stats.get("by_workspace", {})
+
+    lines = [
+        f"# Brain Summary (авто-обновляется)",
+        f"Обновлено: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC",
+        "",
+        "## Статистика",
+        f"{stats.get('total_files', 0)} записей | " +
+        " | ".join(f"{t}: {c}" for t, c in sorted(by_type.items(), key=lambda x: -x[1])[:5]),
+        "",
+        "## Воркспейсы",
+    ] + [f"- {w}: {c} записей" for w, c in sorted(by_ws.items(), key=lambda x: -x[1])]
+
+    if feature_slugs:
+        lines += ["", "## Активные фичи"] + [f"- {s}" for s in feature_slugs[:10]]
+
+    lines += ["", "## Последние 10 записей"]
+    for f in recent:
+        date = f.get("date_updated", "")[:10]
+        lines.append(f"- [{f.get('type', '?')}] {date}: {f.get('summary', '')[:80]}")
+
+    summary_path = storage.root / "_index" / "_brain_summary.md"
+    summary_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _recalculate_stats(files: list[dict]) -> dict:
     by_type: dict[str, int] = {}
     by_workspace: dict[str, int] = {}
