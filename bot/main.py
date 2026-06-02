@@ -174,33 +174,51 @@ async def handle_document(msg: Message):
         await msg.answer(persona.QUOTA_EXCEEDED)
         return
 
-    status_msg = await msg.answer(f"📄 {persona.thinking()}")
+    fname = msg.document.file_name or "документ"
+    fsize_mb = round((msg.document.file_size or 0) / 1024 / 1024, 1)
+    status_msg = await msg.answer(f"📄 *{fname}* ({fsize_mb} МБ)\n{persona.thinking()}", parse_mode="Markdown")
 
     try:
+        await status_msg.edit_text(f"📄 *{fname}*\n⬇️ Скачиваю...", parse_mode="Markdown")
         file = await bot.get_file(msg.document.file_id)
         file_bytes = await bot.download_file(file.file_path)
         raw_bytes = file_bytes.read() if hasattr(file_bytes, "read") else bytes(file_bytes)
 
+        await status_msg.edit_text(f"📄 *{fname}*\n🔍 Извлекаю текст и изображения...", parse_mode="Markdown")
         storage = BrainStorage(user_id)
-        parsed = await parse_document(raw_bytes, msg.document.file_name or "document", storage, user_id)
+        parsed = await parse_document(raw_bytes, fname, storage, user_id)
 
         if parsed.error:
-            await status_msg.edit_text(f"{persona.error()}\n\n{parsed.error}")
+            logger.error(f"Document parse error [{fname}]: {parsed.error}")
+            await status_msg.edit_text(
+                f"🌊 *Шторм при разборе документа*\n\n`{parsed.error}`",
+                parse_mode="Markdown",
+            )
             return
 
         if not parsed.text.strip():
             await status_msg.edit_text("🌊 Документ пуст или не содержит текста.")
             return
 
-        content = f"Файл: {msg.document.file_name}\n\n{parsed.text}"
+        pages_info = f" • {parsed.page_count} стр." if parsed.page_count else ""
+        imgs_info = f" • {len(parsed.images)} изобр." if parsed.images else ""
+        await status_msg.edit_text(
+            f"📄 *{fname}*{pages_info}{imgs_info}\n🔱 Философствую над содержимым...",
+            parse_mode="Markdown",
+        )
+
+        content = f"Файл: {fname}\n\n{parsed.text}"
         if msg.caption:
             content = f"{msg.caption}\n\n{content}"
 
         await _run_ingest_pipeline(content, user_id, status_msg, images=parsed.images)
 
     except Exception as e:
-        logger.exception("Document ingest error")
-        await status_msg.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
+        logger.exception(f"Document ingest error [{fname}]")
+        await status_msg.edit_text(
+            f"🌊 *Шторм при обработке {fname}*\n\n`{type(e).__name__}: {e}`",
+            parse_mode="Markdown",
+        )
 
 
 @main_router.message(F.photo)
