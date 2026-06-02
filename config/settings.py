@@ -34,5 +34,8 @@ class Settings(BaseSettings):
     # Max chars of raw text sent to classifier (covers ~3K tokens)
     CLASSIFIER_INPUT_LIMIT: int = 12000
 
+    # Todoist integration (optional)
+    TODOIST_API_KEY: str = ""
+
 
 settings = Settings()

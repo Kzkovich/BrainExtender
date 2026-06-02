@@ -4,6 +4,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio
 import logging
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -20,6 +21,7 @@ from aiogram.types import (
 from bot.inbox_reminder import start_inbox_reminder
 from bot.onboarding import router as onboarding_router
 from bot import persona
+from bot.modules import get_applicable_modules
 from brain.classifier import classify
 from brain.deduplicator import check_before_save, enrich_existing
 from brain.document_parser import parse_document, format_images_for_obsidian
@@ -27,6 +29,7 @@ from brain.formatter import format_content
 from brain.indexer import update_index
 from brain.linker import link_and_inject
 from brain.profiles import ProfileLoader
+from brain.splitter import analyze_and_split
 from brain.storage import BrainStorage
 from config.settings import settings
 from core.quotas import check_quota, get_usage_since
@@ -58,11 +61,22 @@ def _is_rate_limited(user_id: str) -> bool:
 
 def _ingest_preview_keyboard(classification_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Сохранить", callback_data=f"ingest:save:{classification_id}")],
-        [InlineKeyboardButton(text="📝 Сохранить как личная заметка", callback_data=f"ingest:personal:{classification_id}")],
-        [InlineKeyboardButton(text="✏️ Изменить тип", callback_data=f"ingest:retype:{classification_id}")],
+        [InlineKeyboardButton(text="⚓ Сохранить", callback_data=f"ingest:save:{classification_id}")],
+        [InlineKeyboardButton(text="✍️ Сохранить как личная заметка", callback_data=f"ingest:personal:{classification_id}")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data=f"ingest:cancel:{classification_id}")],
     ])
+
+
+def _modules_keyboard(cid: str, content: str, classification_type: str) -> Optional[InlineKeyboardMarkup]:
+    """Build keyboard with applicable module buttons after save."""
+    modules = get_applicable_modules(content, classification_type)
+    if not modules:
+        return None
+    buttons = [
+        [InlineKeyboardButton(text=m.button_label, callback_data=f"module:{m.module_id}:{cid}")]
+        for m in modules
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # Temporary in-memory store for pending ingests
@@ -98,63 +112,120 @@ async def handle_ingest(msg: Message):
 
 
 async def _run_ingest_pipeline(raw_text: str, user_id: str, status_msg, images: list[str] = None):
-    """Shared pipeline: classify → dedup check → format → link → preview."""
+    """
+    Full pipeline:
+    1. Split content if it contains multiple topics
+    2. For each chunk: classify → dedup → format → preview
+    """
     import uuid
-    from datetime import datetime as dt
-    pipeline_start = dt.utcnow()
     storage = BrainStorage(user_id)
     meta = storage.get_meta()
     profile = ProfileLoader.load(meta.get("profile_id", "universal"))
 
-    classification = await classify(raw_text, user_id)
+    # --- Step 1: Check if content should be split ---
+    await status_msg.edit_text("🔱 Философствую над содержимым...")
+    split = await analyze_and_split(raw_text, user_id)
 
-    # Deduplication check
-    dedup = await check_before_save(raw_text, classification, storage, user_id)
+    if split.should_split and len(split.chunks) > 1:
+        # Multi-chunk flow: process each chunk separately
+        await status_msg.edit_text(
+            f"🌊 *Вижу {len(split.chunks)} смысловых потока.*\n{split.reason}\n\nОбрабатываю каждый...",
+            parse_mode="Markdown",
+        )
+        results = []
+        for i, chunk in enumerate(split.chunks, 1):
+            await status_msg.edit_text(
+                f"🔱 Поток {i}/{len(split.chunks)}: *{chunk.title}*",
+                parse_mode="Markdown",
+            )
+            cid = await _process_single_chunk(
+                chunk.content, user_id, storage, profile,
+                images=images if i == 1 else None,
+                hint=chunk.hint,
+            )
+            results.append((chunk.title, cid))
 
-    body, frontmatter = await format_content(raw_text, classification, profile, user_id)
+        # Show summary with all chunks as separate messages
+        for title, cid in results:
+            pending = _pending.get(cid)
+            if not pending:
+                continue
+            cl = pending["classification"]
+            await status_msg.answer(
+                f"📋 *{cl.raw_title or title}*\nКуда: `{cl.target_path}`",
+                parse_mode="Markdown",
+                reply_markup=_ingest_preview_keyboard(cid),
+            )
+        await status_msg.edit_text(
+            f"🌊 *{len(results)} потока готовы к сохранению.* Проверь каждый выше.",
+            parse_mode="Markdown",
+        )
+    else:
+        # Single chunk flow
+        cid = await _process_single_chunk(raw_text, user_id, storage, profile, images=images)
+        pending = _pending[cid]
+        classification = pending["classification"]
+        dedup = pending["dedup"]
 
-    # Append images if any
+        file_type = profile.get_file_type(classification.content_type)
+        type_name = file_type.name if file_type else classification.content_type
+        mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
+
+        dedup_line = ""
+        if dedup.action == "update_existing":
+            dedup_line = f"\n♻️ Обогатит: `{dedup.existing_path}`"
+        elif dedup.action == "link_to_existing":
+            dedup_line = f"\n🔗 Слинкует с: `{dedup.existing_path}`"
+
+        img_line = f"\n🖼 Вложений: {len(images)}" if images else ""
+
+        preview_text = (
+            f"📋 *{classification.raw_title or 'Без названия'}*\n"
+            f"Тип: {type_name}  {mode_icon}\n"
+            f"Куда: `{classification.target_path}`"
+            f"{dedup_line}{img_line}\n"
+            f"Уверенность: {int(classification.confidence * 100)}%"
+        )
+        await status_msg.edit_text(
+            preview_text,
+            parse_mode="Markdown",
+            reply_markup=_ingest_preview_keyboard(cid),
+        )
+
+
+async def _process_single_chunk(
+    content: str,
+    user_id: str,
+    storage,
+    profile,
+    images: list[str] = None,
+    hint: str = "",
+) -> str:
+    """Process one content chunk → returns cid stored in _pending."""
+    import uuid
+    if hint:
+        content_for_classify = f"[Контекст: {hint}]\n\n{content}"
+    else:
+        content_for_classify = content
+
+    classification = await classify(content_for_classify, user_id)
+    dedup = await check_before_save(content, classification, storage, user_id)
+    body, frontmatter = await format_content(content, classification, profile, user_id)
+
     if images:
         body = format_images_for_obsidian(images, body)
 
     cid = str(uuid.uuid4())[:8]
     _pending[cid] = {
-        "raw_text": raw_text,
+        "raw_text": content,
         "body": body,
         "frontmatter": frontmatter,
         "classification": classification,
         "dedup": dedup,
         "user_id": user_id,
         "images": images or [],
-        "pipeline_start": pipeline_start,
     }
-
-    file_type = profile.get_file_type(classification.content_type)
-    type_name = file_type.name if file_type else classification.content_type
-    mode_icon = "📐" if classification.note_mode == "structured" else "✍️"
-
-    # Build dedup hint
-    dedup_line = ""
-    if dedup.action == "update_existing":
-        dedup_line = f"\n♻️ Обогатит: `{dedup.existing_path}`"
-    elif dedup.action == "link_to_existing":
-        dedup_line = f"\n🔗 Слинкует с: `{dedup.existing_path}`"
-
-    img_line = f"\n🖼 Вложений: {len(images)}" if images else ""
-
-    preview_text = (
-        f"📋 *{classification.raw_title or 'Без названия'}*\n"
-        f"Тип: {type_name}  {mode_icon}\n"
-        f"Куда: `{classification.target_path}`"
-        f"{dedup_line}{img_line}\n"
-        f"Уверенность: {int(classification.confidence * 100)}%"
-    )
-
-    await status_msg.edit_text(
-        preview_text,
-        parse_mode="Markdown",
-        reply_markup=_ingest_preview_keyboard(cid),
-    )
+    return cid
 
 
 @main_router.message(F.document)
@@ -334,9 +405,53 @@ async def handle_ingest_action(call: CallbackQuery):
             f"⚓ *{action_label} в глубинах памяти.*\n`{target_path}`{cost_line}",
             parse_mode="Markdown",
         )
+
+        # Show module buttons if applicable
+        raw_text = pending.get("raw_text", "")
+        classification_type = pending["classification"].content_type
+        modules_kb = _modules_keyboard(cid, raw_text, classification_type)
+        if modules_kb:
+            await call.message.answer(
+                "🔱 *Что сделать с этой записью?*",
+                parse_mode="Markdown",
+                reply_markup=modules_kb,
+            )
+
     except Exception as e:
         logger.exception("Save error")
         await call.message.edit_text(f"{persona.error()}\n\n`{e}`", parse_mode="Markdown")
+
+
+@main_router.callback_query(lambda c: c.data and c.data.startswith("module:"))
+async def handle_module(call: CallbackQuery):
+    """Run a post-save module."""
+    parts = call.data.split(":", 2)
+    if len(parts) < 3:
+        return
+    _, module_id, cid = parts
+    user_id = str(call.from_user.id)
+
+    pending = _pending.get(cid)
+    if not pending:
+        await call.answer("Сессия истекла.", show_alert=True)
+        return
+
+    from bot.modules import ALL_MODULES
+    module = next((m for m in ALL_MODULES if m.module_id == module_id), None)
+    if not module:
+        await call.answer("Модуль не найден.", show_alert=True)
+        return
+
+    await call.answer("🔱 Выполняю...")
+    await call.message.edit_text(f"🌊 *{module.button_label}*\nФилософствую...", parse_mode="Markdown")
+
+    result = await module.run(
+        content=pending.get("raw_text", ""),
+        user_id=user_id,
+        extra={"classification": pending.get("classification")},
+    )
+
+    await call.message.edit_text(result.message, parse_mode="Markdown")
 
 
 @main_router.message(Command("stats"))
