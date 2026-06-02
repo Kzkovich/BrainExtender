@@ -1,0 +1,84 @@
+profile_id: product_owner
+display_name: "Product Owner / Product Manager"
+description: "Для продактов: фичи, договорённости, метрики, исследования"
+
+file_types:
+  - id: meeting
+    name: "Встреча"
+    template_path: "templates/po_meeting.md"
+
+  - id: agreement
+    name: "Договорённость"
+    template_path: "templates/po_agreement.md"
+    append_target: "_context/agreements.md"
+
+  - id: feature
+    name: "Фича / продукт"
+    template_path: "templates/po_feature.md"
+
+  - id: research
+    name: "Исследование / статья"
+    template_path: "templates/po_research.md"
+
+  - id: decision
+    name: "Решение (ADR)"
+    template_path: "templates/po_decision.md"
+
+  - id: task
+    name: "Задача"
+    template_path: "templates/po_task.md"
+
+  - id: note
+    name: "Свободная заметка"
+    template_path: "templates/po_note.md"
+    note_mode: personal
+
+domain_vocabulary:
+  roles:
+    - PO
+    - PM
+    - стейкхолдер
+    - тимлид
+    - разработчик
+    - дизайнер
+    - аналитик
+  artifacts:
+    - BRD
+    - PRD
+    - user story
+    - acceptance criteria
+    - definition of done
+    - roadmap
+  process:
+    - sprint
+    - backlog
+    - груминг
+    - ретро
+    - планирование
+    - демо
+    - стендап
+
+default_workspaces:
+  - slug: work
+    name: "Работа"
+    domain: work
+  - slug: personal
+    name: "Личное"
+    domain: personal
+
+classifier_hints: |
+  Пользователь — Product Owner. При классификации учитывай:
+  - Любая зафиксированная договорённость с бизнесом / тех-командой → type=agreement
+  - Конспект встречи с action items → type=meeting
+  - Описание новой возможности продукта → type=feature
+  - Статья / research с конкурентным анализом → type=research
+  - Запись о конкретном техническом или продуктовом решении → type=decision
+  - Задача с дедлайном или исполнителем → type=task
+  - Всё остальное личное → type=note (personal mode)
+
+formatter_hints: |
+  При оформлении контента:
+  - Сохраняй конкретику (поля, метрики, цифры, дедлайны)
+  - Action items выноси отдельно с ответственными
+  - Если есть упоминание людей — выноси в frontmatter.people
+  - Договорённости формулируй чётко: кто, что, когда

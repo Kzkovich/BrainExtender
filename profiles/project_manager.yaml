@@ -1,0 +1,84 @@
+profile_id: project_manager
+display_name: "Project Manager"
+description: "Для проджект-менеджеров: проекты, риски, статусы, ресурсы"
+
+file_types:
+  - id: meeting
+    name: "Встреча / статус"
+    template_path: "templates/pm_meeting.md"
+
+  - id: risk
+    name: "Риск / проблема"
+    template_path: "templates/pm_risk.md"
+    append_target: "_context/risks.md"
+
+  - id: milestone
+    name: "Веха / дедлайн"
+    template_path: "templates/pm_milestone.md"
+
+  - id: resource
+    name: "Ресурс / команда"
+    template_path: "templates/pm_resource.md"
+
+  - id: status_report
+    name: "Статус-репорт"
+    template_path: "templates/pm_status.md"
+
+  - id: task
+    name: "Задача"
+    template_path: "templates/po_task.md"
+
+  - id: note
+    name: "Свободная заметка"
+    template_path: "templates/pm_note.md"
+    note_mode: personal
+
+domain_vocabulary:
+  roles:
+    - PM
+    - проджект
+    - заказчик
+    - исполнитель
+    - стейкхолдер
+    - ресурс
+    - подрядчик
+  artifacts:
+    - Gantt
+    - WBS
+    - устав проекта
+    - план проекта
+    - реестр рисков
+    - статус-репорт
+    - RACI
+  process:
+    - веха
+    - дедлайн
+    - эскалация
+    - риск
+    - бюджет
+    - scope
+    - ресурс
+    - зависимость
+
+default_workspaces:
+  - slug: projects
+    name: "Проекты"
+    domain: work
+  - slug: personal
+    name: "Личное"
+    domain: personal
+
+classifier_hints: |
+  Пользователь — Project Manager. При классификации учитывай:
+  - Риск, угроза, проблема → type=risk
+  - Ключевая дата, веха, дедлайн → type=milestone
+  - Встреча, статус, апдейт → type=meeting
+  - Статус-репорт, еженедельный отчёт → type=status_report
+  - Информация о команде, ресурсе, подрядчике → type=resource
+  - Задача с исполнителем → type=task
+
+formatter_hints: |
+  При оформлении:
+  - Риски формулируй: вероятность / влияние / митигация
+  - В статусах: что сделано / что блокирует / что следующее
+  - Дедлайны выноси явно в frontmatter

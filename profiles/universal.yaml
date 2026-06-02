@@ -1,0 +1,40 @@
+profile_id: universal
+display_name: "Универсальный"
+description: "Минимальный набор для любого пользователя"
+
+file_types:
+  - id: meeting
+    name: "Встреча"
+    template_path: "templates/universal_meeting.md"
+
+  - id: task
+    name: "Задача"
+    template_path: "templates/universal_task.md"
+
+  - id: note
+    name: "Заметка"
+    template_path: "templates/universal_note.md"
+    note_mode: structured
+
+  - id: personal_note
+    name: "Личная заметка"
+    template_path: "templates/universal_note.md"
+    note_mode: personal
+
+default_workspaces:
+  - slug: work
+    name: "Работа"
+    domain: work
+  - slug: personal
+    name: "Личное"
+    domain: personal
+
+classifier_hints: |
+  Используй минимальный набор типов:
+  - Встреча, созвон, конференция → type=meeting
+  - Задача, дедлайн, нужно сделать → type=task
+  - Личные мысли, дневник, рефлексия → type=personal_note
+  - Всё остальное → type=note
+
+formatter_hints: |
+  Простое форматирование: заголовок, дата, суть, action items если есть.

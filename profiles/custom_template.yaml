@@ -1,0 +1,30 @@
+profile_id: custom
+display_name: "Мой профиль"
+description: "Кастомный профиль — отредактируй под себя"
+
+file_types:
+  - id: note
+    name: "Заметка"
+    template_path: "templates/universal_note.md"
+    note_mode: structured
+
+  - id: personal_note
+    name: "Личная заметка"
+    template_path: "templates/universal_note.md"
+    note_mode: personal
+
+  # Добавь свои типы по образцу:
+  # - id: my_type
+  #   name: "Мой тип"
+  #   template_path: "templates/my_template.md"
+
+default_workspaces:
+  - slug: main
+    name: "Основное"
+    domain: work
+
+classifier_hints: |
+  Кастомный профиль. Определи свои правила классификации.
+
+formatter_hints: |
+  Кастомный профиль. Определи свои правила форматирования.

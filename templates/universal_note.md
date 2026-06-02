@@ -1,0 +1,5 @@
+# {{ title }}
+
+**Дата:** {{ date }}
+
+{{ narrative }}

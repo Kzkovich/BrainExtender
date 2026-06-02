@@ -1,0 +1,71 @@
+profile_id: researcher
+display_name: "Исследователь"
+description: "Для исследователей: гипотезы, результаты, литература, эксперименты"
+
+file_types:
+  - id: hypothesis
+    name: "Гипотеза"
+    template_path: "templates/research_hypothesis.md"
+
+  - id: finding
+    name: "Находка / результат"
+    template_path: "templates/research_finding.md"
+
+  - id: literature
+    name: "Литература / статья"
+    template_path: "templates/research_literature.md"
+
+  - id: experiment
+    name: "Эксперимент"
+    template_path: "templates/research_experiment.md"
+
+  - id: interview
+    name: "Интервью / UX research"
+    template_path: "templates/research_interview.md"
+
+  - id: note
+    name: "Свободная заметка"
+    template_path: "templates/research_note.md"
+    note_mode: personal
+
+domain_vocabulary:
+  research:
+    - гипотеза
+    - исследование
+    - эксперимент
+    - выборка
+    - результат
+    - вывод
+    - источник
+    - цитата
+  methodology:
+    - качественный
+    - количественный
+    - интервью
+    - опрос
+    - наблюдение
+    - A/B тест
+    - статистика
+    - p-value
+
+default_workspaces:
+  - slug: research
+    name: "Исследования"
+    domain: work
+  - slug: personal
+    name: "Личное"
+    domain: personal
+
+classifier_hints: |
+  Пользователь — исследователь. При классификации учитывай:
+  - Предположение, гипотеза, "что если" → type=hypothesis
+  - Результат эксперимента, наблюдение, вывод → type=finding
+  - Упоминание автора + статья / книга / источник → type=literature
+  - Описание методологии, плана эксперимента → type=experiment
+  - Конспект интервью, цитаты респондентов → type=interview
+
+formatter_hints: |
+  При оформлении:
+  - Гипотезы формулируй в формате: "Если X, то Y, потому что Z"
+  - Источники: автор, год, название, ключевые тезисы
+  - Результаты: метрики, наблюдения, выводы отдельно

@@ -1,0 +1,36 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/brain-expander
+
+            echo "=== Pulling latest code ==="
+            git pull origin main
+
+            echo "=== Building and restarting containers ==="
+            docker compose up -d --build --remove-orphans
+
+            echo "=== Cleanup old images ==="
+            docker image prune -f
+
+            echo "=== Health check ==="
+            sleep 5
+            curl -sf http://127.0.0.1:8001/health && echo "API OK" || echo "API not responding yet"
+
+            echo "=== Deploy complete ==="
