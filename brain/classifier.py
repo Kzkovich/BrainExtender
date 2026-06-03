@@ -148,7 +148,7 @@ suggested_tasks — конкретные глагольные формулиро
 - should_split=true ТОЛЬКО если в тексте несколько ПРИНЦИПИАЛЬНО разных тем (встреча + отдельное исследование)
 - should_split=false если единая тема, пусть и длинная (встреча с action items — это одна заметка)
 - Если should_split=true, заполни split_chunks:
-  [{"title": "...", "content": "фрагмент текста", "chunk_type": "meeting|research|decision|note", "hint": "подсказка"}]
+  [{{"title": "...", "content": "фрагмент текста", "chunk_type": "meeting|research|decision|note", "hint": "подсказка"}}]
 - Максимум 4 чанка. Если doubt — ставь should_split=false
 
 Правила для target_path:
